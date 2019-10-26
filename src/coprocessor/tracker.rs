@@ -10,6 +10,8 @@ use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::readpool_impl::*;
 use crate::coprocessor::*;
 
+use libc::{getrusage, rusage, timeval};
+
 // If handle time is larger than the lower bound, the query is considered as slow query.
 const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
@@ -49,6 +51,10 @@ pub struct Tracker {
     total_process_time: Duration,
     total_exec_metrics: ExecutorMetrics,
     total_perf_statistics: PerfStatisticsDelta, // Accumulated perf statistics
+    user_time: i64,
+    sys_time: i64,
+    in_block: i64,
+    out_block: i64,
 
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
@@ -71,6 +77,10 @@ impl Tracker {
             total_process_time: Duration::default(),
             total_exec_metrics: ExecutorMetrics::default(),
             total_perf_statistics: PerfStatisticsDelta::default(),
+            in_block: 0,
+            out_block: 0,
+            user_time: 0,
+            sys_time: 0,
 
             req_ctx,
         }
@@ -82,6 +92,10 @@ impl Tracker {
         self.current_stage = TrackerState::AllItemsBegan;
     }
 
+    fn timeval_to_usec(tv: timeval) -> i64 {
+        tv.tv_sec * 1000000 + tv.tv_usec as i64
+    }
+
     pub fn on_begin_item(&mut self) {
         assert!(
             self.current_stage == TrackerState::AllItemsBegan
@@ -90,7 +104,43 @@ impl Tracker {
         self.item_begin_at = Instant::now_coarse();
         self.perf_statistics_start = Some(PerfStatisticsInstant::new());
         self.current_stage = TrackerState::ItemBegan;
+        let mut ru = Self::new_rusage();
+        if unsafe { getrusage(1, &mut ru) } == 0 {
+            self.in_block = ru.ru_inblock;
+            self.out_block = ru.ru_oublock;
+            self.user_time = Self::timeval_to_usec(ru.ru_utime);
+            self.sys_time = Self::timeval_to_usec(ru.ru_stime);
+        }
+
     }
+
+    fn new_rusage() -> rusage {
+        libc::rusage {
+            ru_utime: libc::timeval {
+                tv_sec: 0,
+                tv_usec: 0,
+            },
+            ru_stime: libc::timeval {
+                tv_sec: 0,
+                tv_usec: 0,
+            },
+            ru_maxrss: 0,
+            ru_ixrss: 0,
+            ru_idrss: 0,
+            ru_isrss: 0,
+            ru_minflt: 0,
+            ru_majflt: 0,
+            ru_nswap: 0,
+            ru_inblock: 0,
+            ru_oublock: 0,
+            ru_msgsnd: 0,
+            ru_msgrcv: 0,
+            ru_nsignals: 0,
+            ru_nvcsw: 0,
+            ru_nivcsw: 0,
+        }
+    }
+
 
     pub fn on_finish_item(&mut self, some_exec_metrics: Option<ExecutorMetrics>) {
         assert_eq!(self.current_stage, TrackerState::ItemBegan);
@@ -105,6 +155,14 @@ impl Tracker {
             self.total_perf_statistics += perf_stats.delta();
         }
         self.current_stage = TrackerState::ItemFinished;
+        let mut ru = Self::new_rusage();
+        if self.in_block != 0 && unsafe { getrusage(1, &mut ru) } == 0 {
+            self.in_block -= ru.ru_inblock;
+            self.out_block -= ru.ru_oublock;
+            self.user_time -= Self::timeval_to_usec(ru.ru_utime);
+            self.sys_time -= Self::timeval_to_usec(ru.ru_stime);
+        }
+
     }
 
     /// Get current item's ExecDetail according to previous collected metrics.
