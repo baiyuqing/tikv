@@ -181,6 +181,12 @@ impl Tracker {
             let detail = self.total_exec_metrics.cf_stats.scan_detail();
             exec_details.set_scan_detail(detail);
         }
+        let mut sys_detail = kvrpcpb::SysDetail::new();
+	sys_detail.InBlock = self.in_block;
+	sys_detail.OutBlock = self.out_block;
+	sys_detail.UserTime = self.user_time;
+	sys_detail.SysTime = self.sys_time;
+        exec_details.set_sys_detail(sys_detail);
         exec_details
     }
 
