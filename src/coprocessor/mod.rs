@@ -45,6 +45,7 @@ use txn_types::TsSet;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;
+pub const REQ_TYPE_VM: i64 = 106;
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
